@@ -8,10 +8,11 @@
 #include <cstdio>
 #include <cstdlib>
 
-// Criaos aqui porque precisam ser usados na classe Aeroporto
-std::mutex pousos_mutex;
-std::mutex decolagens_mutex;
+// Inicializei as variáveis aqui porque elas precisam ser vistas pelas threads
+int size, rank,
+        provided;
 
+// Criaos aqui porque precisam ser usados na classe Aeroporto
 struct Voo {
     int codigo,
         origem,
@@ -68,19 +69,18 @@ private:
     std::vector<struct Voo> decolagens_feitas;
     std::vector<struct Voo> pousos_pendentes;
     std::vector<struct Voo> pousos_feitos;
+    bool loop = true;
     int id;
     int lc;
 
+    std::mutex pousos_mutex;
+
     void addDecolagem(struct Voo voo) {
-        decolagens_mutex.lock();
         decolagens_pendentes.push_back(voo);
-        decolagens_mutex.unlock();
     }
 
     void addPouso(struct Voo voo) {
-        pousos_mutex.lock();
         pousos_pendentes.push_back(voo);
-        pousos_mutex.unlock();
     } 
 
     // Implementação de um pop_at que remove um item em uma determinada posicao do vetor 
@@ -96,7 +96,6 @@ private:
     // Atualiza o estado dos voos de acordo com o relógio local
     void atualizar() {
         
-        decolagens_mutex.lock();
         for(long unsigned i = 0; i < decolagens_pendentes.size(); i++) {
             struct Voo decolagem = decolagens_pendentes[i];
             if(lc >= decolagem.hora_saida) {
@@ -104,17 +103,14 @@ private:
                 decolagens_feitas.push_back(decolagem);    
             }
         }
-        decolagens_mutex.unlock();
         
-        pousos_mutex.lock();
         for(long unsigned i = 0; i < pousos_pendentes.size(); i++) {
             struct Voo pouso = pousos_pendentes[i];
             if(lc >= pouso.hora_chegada) {
                 pousos_pendentes = remove(pousos_pendentes, i);
                 pousos_feitos.push_back(pouso);    
             }
-        }
-        pousos_mutex.unlock();
+        }        
     }
 
     // Define qual voo tem maior prioridade dentre os pendentes (pousos e decolagens)
@@ -146,26 +142,22 @@ private:
 
     // Faz chamadas para a funcao prioridade para atualizar o valor dos voos com menor prioridade e conflito
     void corrigeConflitos(struct Voo &voo) {
-        decolagens_mutex.lock();
         for(long unsigned i = 0; i < decolagens_pendentes.size(); i++) 
             prioridade(voo, decolagens_pendentes[i]);
-        decolagens_mutex.unlock();
         
-        pousos_mutex.lock();
         for(long unsigned i = 0; i < pousos_pendentes.size(); i++) 
             prioridade(voo, pousos_pendentes[i]);
-        pousos_mutex.unlock();
     }
 
     // Imprime os dados do aeroporto
     void display() {
         // Garante que os dados sejam acessados somente após alguma modificação
-        decolagens_mutex.lock();
-        pousos_mutex.lock();
         // Impressão dos voos
+        system("clear");
         int total_pousos = pousos_feitos.size() + pousos_pendentes.size();
         int total_decolagens = decolagens_feitas.size() + decolagens_pendentes.size();
-        std::cout << "|Codigo |           " << id << "          |\n" <<
+        std::cout << "|Hora   | " << lc << "                    |\n" <<
+                     "|Codigo |           " << id << "          |\n" <<
                      "|Pousos | " << total_pousos << " | Decolagens: " << total_decolagens << " |\n" <<
                      "|Pousos | Origem | Chegada | T. Voo |\n";
         for(int i = 0; i < (int)pousos_feitos.size(); i++)
@@ -181,25 +173,44 @@ private:
         for(int i = 0; i < (int)decolagens_pendentes.size(); i++)
             std::cout << "| " << decolagens_pendentes[i].codigo << " | " << decolagens_pendentes[i].destino <<
                         " | " << decolagens_pendentes[i].hora_saida << " | " << decolagens_pendentes[i].tempo_voo << " |\n";
-        pousos_mutex.unlock();
-        decolagens_mutex.unlock();
     }
 
     // Inputs da criacao de um voo
     Voo menuAddVoo() {
         int destino, saida, chegada;
+        bool condition;
         // Input das informações suficientes para criação do voo
-        std::cout << "Destino: ";
-        std::cin >> destino;
-        std::cout << "Saida: ";
-        std::cin >> saida;
-        std::cout << "Chegada: ";
-        std::cin >> chegada;
+
+        // Controle de input para o destino no intervalo [1, size[
+        do {
+            std::cout << "Destino: ";
+            std::cin >> destino;
+            condition = destino < 1 || destino > size;
+            if(condition)
+                std::cout << "Digite um valor no intervalo [1, n_aeroportos[" << std::endl;
+        } while(condition);
+
+        // Controle de saída (precisa ser maior ou igual que o local clock)
+        do {
+            std::cout << "Saida: ";
+            std::cin >> saida;
+            condition = saida < lc;
+            if(condition) 
+                std::cout << "Digite um valor maior ou igual que o horario local" << std::endl;
+        } while(condition);
+
+        // Controle de chegada (precisa ser maior que a saida)
+        do {
+            std::cout << "Chegada: ";
+            std::cin >> chegada;
+            condition = chegada <= saida;
+            if(condition)
+                std::cout << "Digite um valor maior que o horario de saida do voo" << std::endl;
+        } while(condition);
+
         // Voo(int ori, int dest, int h_said, int h_cheg)
         struct Voo v = Voo(id, destino, saida, chegada);
-        decolagens_mutex.lock();
         v.codigo = id * 100 + (int)(decolagens_feitas.size() + decolagens_pendentes.size());
-        decolagens_mutex.unlock();
         return v;
     }
 
@@ -207,8 +218,10 @@ private:
     bool commVoo(Voo v) {
         MPI_Request req;
         Mensagem msg = Mensagem(0);
+        msg.voo = v;
         MPI_Isend(&msg, sizeof(Mensagem), MPI_BYTE, v.destino - 1, 0, MPI_COMM_WORLD, &req);
         // Passo 2 do algoritmo da descrição do trabalho
+        MPI_Wait(&req, MPI_STATUS_IGNORE);
         lc++;
         // Adiciona o voo à lista de decolagens
         addDecolagem(v);
@@ -219,28 +232,35 @@ private:
     bool recvVoo() {
         MPI_Request req;
         MPI_Status sta;
-        Mensagem msg = Mensagem(0);
+        Mensagem msg = Mensagem(lc);
         MPI_Irecv(&msg, sizeof(Mensagem), MPI_BYTE, MPI_ANY_SOURCE, 0, MPI_COMM_WORLD, &req);
         MPI_Wait(&req, &sta);
+        std::cout << msg.voo.toString() << std::endl;
         // Passo 3 do algoritmo da descrição do trabalho
         lc = (lc < msg.lc ? msg.lc + 1 : lc + 1);
         // Adiciona o pouso à lista de pousos
+        pousos_mutex.lock();
         addPouso(msg.voo);
         atualizar();
         corrigeConflitos(msg.voo);
+        pousos_mutex.unlock();
+
         return true;
     }
+public:
+    Aeroporto(int c_id) {
+        id = c_id;
+        lc = 0;
+    }
 
-    void receiver() {
-        while(recvVoo()) {
+    void rcv() {
+        while(loop) {
+            recvVoo();
         }
     }
 
     void menu() {
-        bool loop = true;
         char opt = '0';
-
-        system("clear");
 
         while(loop) {
             display();
@@ -255,9 +275,12 @@ private:
             switch(opt) {
                 case '1': {
                     struct Voo temp_v = menuAddVoo();
-                    addDecolagem(temp_v);
+                    pousos_mutex.lock();
+                    commVoo(temp_v);
                     atualizar();
                     corrigeConflitos(temp_v);
+                    pousos_mutex.unlock();
+                    system("clear");
                     } 
                     break;
                 case '2':
@@ -266,16 +289,13 @@ private:
             }
         }
     }
-public:
-    Aeroporto(int c_id) {
-        id = c_id;
-        lc = 0;
-    }
 
     void init() {
-        std::thread t_main(&Aeroporto::menu, this);           // controle de ordenação e envios
-        std::thread t_recv(&Aeroporto::receiver, this);       // controle de recebimentos
+        std::vector<std::thread> threads;
 
+        std::thread t_main(&Aeroporto::menu, this);           // controle de ordenação e envios
+        std::thread t_recv(&Aeroporto::rcv, this);       // controle de recebimentos
+        
         t_main.join();
         t_recv.join();
     }
@@ -284,8 +304,6 @@ public:
 // Criado como global porque as threads precisam acessar os dados dos aeroportos
 
 int main(int argc, char *argv[]) {
-    int size, rank,
-        provided;
 
     std::vector<Aeroporto> aeroportos;
 
