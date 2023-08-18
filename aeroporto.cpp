@@ -70,6 +70,7 @@ private:
     std::vector<struct Voo> pousos_pendentes;
     std::vector<struct Voo> pousos_feitos;
     bool loop = true;
+    bool new_msg = false; 
     int id;
     int lc;
 
@@ -235,7 +236,6 @@ private:
         Mensagem msg = Mensagem(lc);
         MPI_Irecv(&msg, sizeof(Mensagem), MPI_BYTE, MPI_ANY_SOURCE, 0, MPI_COMM_WORLD, &req);
         MPI_Wait(&req, &sta);
-        std::cout << msg.voo.toString() << std::endl;
         // Passo 3 do algoritmo da descrição do trabalho
         lc = (lc < msg.lc ? msg.lc + 1 : lc + 1);
         // Adiciona o pouso à lista de pousos
@@ -243,6 +243,7 @@ private:
         addPouso(msg.voo);
         atualizar();
         corrigeConflitos(msg.voo);
+        new_msg = true;
         pousos_mutex.unlock();
 
         return true;
@@ -261,6 +262,7 @@ public:
 
     void menu() {
         char opt = '0';
+        bool brk = false;
 
         while(loop) {
             display();
@@ -270,8 +272,16 @@ public:
                             "|2. Sair                    |\n" <<
                             "-----------------------------\n";
                 std::cout << ">";
-                std::cin >> opt;
-            } while(opt != '1' && opt != '2');
+                for(int i = 0; i < 5; i++) {
+                    if(std::cin >> opt) {
+                        brk = true;
+                        break;
+                    }
+                    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                }
+            } while(opt != '1' && opt != '2' && !brk);
+            
+            brk = false;
             switch(opt) {
                 case '1': {
                     struct Voo temp_v = menuAddVoo();
@@ -285,6 +295,8 @@ public:
                     break;
                 case '2':
                     loop = false;
+                    break;
+                default:
                     break;
             }
         }
