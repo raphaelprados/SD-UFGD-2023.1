@@ -87,16 +87,18 @@ private:
     // Implementação de um pop_at que remove um item em uma determinada posicao do vetor 
     std::vector<struct Voo> remove(std::vector<struct Voo> list, int pos) {
         std::vector<struct Voo> new_list;
-        for(long unsigned i = 0, j = 0; i < list.size(); i++, j++) {
-            j += ((int)j != pos) ? 0 : 1;
-            new_list[i] = list[j];
-        }
+        for (size_t i = 0; i < list.size(); i++) {
+            if (static_cast<int>(i) != pos) {
+                new_list.push_back(list[i]);
+            }
+        }        
         return new_list;
     }
 
+
     // Atualiza o estado dos voos de acordo com o relógio local
     void atualizar() {
-        
+
         for(long unsigned i = 0; i < decolagens_pendentes.size(); i++) {
             struct Voo decolagem = decolagens_pendentes[i];
             if(lc >= decolagem.hora_saida) {
@@ -106,6 +108,7 @@ private:
         }
         
         for(long unsigned i = 0; i < pousos_pendentes.size(); i++) {
+            
             struct Voo pouso = pousos_pendentes[i];
             if(lc >= pouso.hora_chegada) {
                 pousos_pendentes = remove(pousos_pendentes, i);
@@ -116,11 +119,15 @@ private:
 
     // Define qual voo tem maior prioridade dentre os pendentes (pousos e decolagens)
     void prioridade(struct Voo &v1, struct Voo &v2) {
-        bool simDecs = v1.origem == v2.origem,
-             simPous = v1.destino == v2.destino;
+        /*  */
+        bool simDecs = (v1.origem == v2.origem && v1.hora_saida == v2.hora_saida && v1.codigo != v2.codigo),
+             simPous = (v1.destino == v2.destino && v1.hora_chegada == v2.hora_chegada && v1.codigo != v2.codigo),
+             decPou = (v1.codigo != v2.codigo) && ((v1.destino == v2.origem && v1.hora_chegada == v2.hora_saida) 
+                        || (v1.origem == v2.destino && v1.hora_saida == v2.hora_chegada));
 
         // Duas decolagens ou dois pousos simultaneos
         if(simDecs || simPous) {
+            // std::cout << "simDecs || simPous, " << v1.codigo <<  " " << v2.codigo << std::endl;
             if(v1.tempo_voo > v2.tempo_voo) {
                 if(simDecs)
                     v2.incremDecolagem();
@@ -133,21 +140,26 @@ private:
                     v1.incremPouso();
             }
         // Um pouso e uma decolagem simultâneos
-        } else {
+        } else if(decPou) {
+            // std::cout << "pouso e decolagem simultaneos, " << v1.codigo <<  " " << v2.codigo << std::endl;
             if(v1.destino == id)
                 v2.incremDecolagem();
             else
                 v1.incremDecolagem();
         }
+        // char foo;
+        // std::cin >> foo;
     }    
 
     // Faz chamadas para a funcao prioridade para atualizar o valor dos voos com menor prioridade e conflito
     void corrigeConflitos(struct Voo &voo) {
+        std::cout << voo.toString() << std::endl;
         for(long unsigned i = 0; i < decolagens_pendentes.size(); i++) 
             prioridade(voo, decolagens_pendentes[i]);
-        
+        std::cout << voo.toString() << std::endl;
         for(long unsigned i = 0; i < pousos_pendentes.size(); i++) 
             prioridade(voo, pousos_pendentes[i]);
+        std::cout << voo.toString() << std::endl;
     }
 
     // Imprime os dados do aeroporto
@@ -224,8 +236,6 @@ private:
         // Passo 2 do algoritmo da descrição do trabalho
         MPI_Wait(&req, MPI_STATUS_IGNORE);
         lc++;
-        // Adiciona o voo à lista de decolagens
-        addDecolagem(v);
         return true;
     }
 
@@ -262,7 +272,6 @@ public:
 
     void menu() {
         char opt = '0';
-        bool brk = false;
 
         while(loop) {
             display();
@@ -270,27 +279,21 @@ public:
                 std::cout << "-----------------------------\n" <<
                             "|1. Adicionar voo           |\n" <<
                             "|2. Sair                    |\n" <<
+                            "|r. Forcar Atualizacao      |\n" <<
                             "-----------------------------\n";
                 std::cout << ">";
-                for(int i = 0; i < 5; i++) {
-                    if(std::cin >> opt) {
-                        brk = true;
-                        break;
-                    }
-                    std::this_thread::sleep_for(std::chrono::milliseconds(100));
-                }
-            } while(opt != '1' && opt != '2' && !brk);
+                std::cin >> opt;
+            } while(opt != '1' && opt != '2' && opt != 'r');
             
-            brk = false;
             switch(opt) {
                 case '1': {
                     struct Voo temp_v = menuAddVoo();
                     pousos_mutex.lock();
-                    commVoo(temp_v);
-                    atualizar();
-                    corrigeConflitos(temp_v);
+                    commVoo(temp_v);                    // Comunica o voo ao outro aeroporto
+                    corrigeConflitos(temp_v);           // Verifica horarios de pousos/decolagens           
+                    addDecolagem(temp_v);               // Adiciona à lista de decolagens pendentes
+                    atualizar();                        // Atualiza valores de acordo com o lc
                     pousos_mutex.unlock();
-                    system("clear");
                     } 
                     break;
                 case '2':
